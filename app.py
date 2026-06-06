@@ -157,7 +157,6 @@ def get_fallback_festival():
     })
 
 def get_fallback_consume():
-    # 시계열용 연도 컬럼을 포함한 가상 세트
     return pd.DataFrame({
         "연도": [2021, 2021, 2021, 2022, 2022, 2022, 2023, 2023, 2023],
         "업종명": ["식음료업", "쇼핑업", "숙박업", "식음료업", "쇼핑업", "숙박업", "식음료업", "쇼핑업", "숙박업"],
@@ -189,7 +188,7 @@ def get_fallback_cost():
 
 
 # ==========================================
-# 1. 페이지 1: 축제 현황 분석 (시계열 꺾은선 복구)
+# 1. 페이지 1: 축제 현황 분석 (집계 에러 예방 완료)
 # ==========================================
 def render_page1():
     st.title("🎪 지역 축제 현황 및 시계열 소비 패턴")
@@ -239,17 +238,21 @@ def render_page1():
             st.write("유입 비중 컬럼 검색에 실패하였습니다. 원본 형태를 표시합니다.")
             st.dataframe(df_fest.head())
             
-    # 2) [복구완료] 연도별 업종 소비 흐름 분석 (col2 - 꺾은선 차트)
+    # 2) [에러 완벽 예방] 연도별 업종 소비 흐름 분석 (col2 - 꺾은선 차트)
     with col2:
         st.subheader("📈 연도별 업종 소비 흐름 (꺾은선)")
         year_col = find_col(df_consume.columns, ["연도", "년도", "시기"]) or df_consume.columns[0]
         sector_col = find_col(df_consume.columns, ["업종명", "업종", "분류"]) or df_consume.columns[1]
         amt_col = find_col(df_consume.columns, ["소비액", "금액", "매출"]) or df_consume.select_dtypes(include=['number']).columns[-1]
         
-        df_consume[amt_col] = pd.to_numeric(df_consume[amt_col], errors='coerce').fillna(0)
+        # [에러 우회 솔루션] 임시 유니크 컬럼명으로 맵핑하여 중복 인서트 에러 방지
+        df_sub = df_consume[[year_col, sector_col, amt_col]].copy()
+        df_sub.columns = ["_temp_year", "_temp_sector", "_temp_amount"]
+        df_sub["_temp_amount"] = pd.to_numeric(df_sub["_temp_amount"], errors='coerce').fillna(0)
         
-        # 연도와 업종으로 그룹합산 후 꺾은선 차트 시각화
-        df_trend = df_consume.groupby([year_col, sector_col])[amt_col].sum().reset_index()
+        # 가공 진행
+        df_trend = df_sub.groupby(["_temp_year", "_temp_sector"])["_temp_amount"].sum().reset_index()
+        df_trend.columns = [year_col, sector_col, amt_col]
         
         fig2 = px.line(
             df_trend,
@@ -275,10 +278,9 @@ def render_page1():
 # 2. 페이지 2: 젠트리피케이션 분석 (실험군 vs 대조군 프레임워크)
 # ==========================================
 def render_page2():
-    st.title("🏢 젠트리피케이션 가설 검증 진단실")
+    st.title("🏢 젠트리피케이션과 지역 축제 상관성 분석")
     st.markdown("축제 상권(실험군)과 일반 상권(대조군)의 분기별 격차를 4사분면 매트릭스와 3D 예산 통제 모델로 입증합니다.")
     
-    # 데이터 로드
     df_vac, is_v_mock = load_table_safely("임대동향 지역별 공실률 소규모 상가", get_fallback_property_vacancy)
     df_rent, is_r_mock = load_table_safely("임대동향 지역별 임대료 소규모 상가", get_fallback_property_rent)
     df_fest, is_f_mock = load_table_safely("문화관광축제주요지표", get_fallback_festival)
@@ -287,7 +289,6 @@ def render_page2():
     if is_v_mock or is_r_mock or is_f_mock or is_c_mock:
         st.sidebar.warning("⚠️ 로컬 DB 일부 누락으로 데모용 시뮬레이션 데이터를 표시하고 있습니다.")
         
-    # 분기 탐색 (가장 첫 분기와 마지막 분기 탐색)
     quarter_cols_vac = [c for c in df_vac.columns if any(q in str(c) for q in ["Q", "q", "1/4", "2/4", "3/4", "4/4", "_", "."])]
     quarter_cols_vac = sorted(quarter_cols_vac)
     
@@ -295,7 +296,6 @@ def render_page2():
         first_q = quarter_cols_vac[0]
         last_q = quarter_cols_vac[-1]
     else:
-        # 분기 데이터 탐색 불가 시 수동 처리
         first_q, last_q = "2022_1Q", "2024_2Q"
         
     reg_col_vac = detect_region_col(df_vac)
@@ -327,39 +327,45 @@ def render_page2():
     
     df_fest_clean = df_fest.copy()
     df_fest_clean[foreign_col] = pd.to_numeric(df_fest_clean[foreign_col], errors='coerce').fillna(0)
-    df_fest_group = df_fest_clean.groupby(fest_reg)[foreign_col].mean().reset_index()
-    df_fest_group.rename(columns={fest_reg: "지자체명", foreign_col: "외부방문자유입"}, inplace=True)
+    
+    # 그룹바이 전 컬럼 중복 삽입 회피 처리
+    df_f_sub = df_fest_clean[[fest_reg, foreign_col]].copy()
+    df_f_sub.columns = ["_temp_reg", "_temp_foreign"]
+    df_fest_group = df_f_sub.groupby("_temp_reg")["_temp_foreign"].mean().reset_index()
+    
+    df_fest_group.columns = ["지자체명", "외부방문자유입"]
     df_fest_group["매칭키"] = df_fest_group["지자체명"].apply(lambda x: str(x)[:2] if pd.notna(x) else "")
     
-    # 4) 지자체 총 예산액 연동 (행사 원가 기준 총비용 추출)
+    # 4) 지자체 총 예산액 연동
     cost_org = find_col(df_cost.columns, ["자치단체", "지자체"]) or df_cost.columns[0]
     cost_val = find_col(df_cost.columns, ["총비용"]) or df_cost.select_dtypes(include=['number']).columns[-1]
     
     df_cost_clean = df_cost.copy()
     df_cost_clean[cost_val] = pd.to_numeric(df_cost_clean[cost_val], errors='coerce').fillna(0)
-    df_cost_group = df_cost_clean.groupby(cost_org)[cost_val].sum().reset_index()
-    df_cost_group.rename(columns={cost_org: "예산지자체", cost_val: "예산총액(원)"}, inplace=True)
+    
+    df_c_sub = df_cost_clean[[cost_org, cost_val]].copy()
+    df_c_sub.columns = ["_temp_org", "_temp_cost"]
+    df_cost_group = df_c_sub.groupby("_temp_org")["_temp_cost"].sum().reset_index()
+    
+    df_cost_group.columns = ["예산지자체", "예산총액(원)"]
     df_cost_group["매칭키"] = df_cost_group["예산지자체"].apply(lambda x: str(x)[:2] if pd.notna(x) else "")
     
     # 5) 종합 조인 (실험군 vs 대조군 레이블 수립)
     df_relation = pd.merge(df_prop, df_fest_group, on="매칭키", how="left")
     df_relation = pd.merge(df_relation, df_cost_group, on="매칭키", how="left")
     
-    # 결측치 정제 및 매핑 처리
     df_relation["외부방문자유입"] = df_relation["외부방문자유입"].fillna(0)
-    df_relation["예산총액(원)"] = df_relation["예산총액(원)"].fillna(1e6) # 최소값 처리
+    df_relation["예산총액(원)"] = df_relation["예산총액(원)"].fillna(1e6)
     
-    # 축제 데이터 매칭 여부에 따라 상권 구분 (실험군: 빨강, 대조군: 파랑)
     df_relation["상권구분"] = df_relation["지자체명"].apply(
         lambda x: "축제 상권 (실험군)" if pd.notna(x) else "일반 상권 (대조군)"
     )
     
-    # 스케일 보완을 위한 연산 (외부방문자유입지표 * 1000)
     df_relation["점크기_방문자"] = df_relation["외부방문자유입"] * 1000
-    df_relation.loc[df_relation["점크기_방문자"] < 5, "점크기_방문자"] = 8  # 최소 가독성 보장 크기
+    df_relation.loc[df_relation["점크기_방문자"] < 5, "점크기_방문자"] = 8
     
     df_relation["예산(백만원)"] = df_relation["예산총액(원)"] / 1000000
-    df_relation["점크기_예산"] = df_relation["예산(백만원)"] / 100 # 버블 스케일 조정
+    df_relation["점크기_예산"] = df_relation["예산(백만원)"] / 100
     df_relation.loc[df_relation["점크기_예산"] < 5, "점크기_예산"] = 8
     
     # ------------------------------------------
@@ -376,8 +382,8 @@ def render_page2():
         color="상권구분",
         text=reg_col_vac,
         color_discrete_map={
-            "축제 상권 (실험군)": "#FF4B4B", # 빨간색
-            "일반 상권 (대조군)": "#1F77B4"  # 파란색
+            "축제 상권 (실험군)": "#FF4B4B",
+            "일반 상권 (대조군)": "#1F77B4"
         },
         labels={
             "임대료변화율": f"임대료 변화율 (% / {first_q} ➔ {last_q})",
@@ -386,7 +392,6 @@ def render_page2():
         },
         template="plotly_white"
     )
-    # 사분면 경계 가이드 점선 추가
     fig1.add_hline(y=0, line_dash="dash", line_color="gray")
     fig1.add_vline(x=0, line_dash="dash", line_color="gray")
     st.plotly_chart(fig1, use_container_width=True, key="p2_quadrant_matrix")
@@ -395,7 +400,7 @@ def render_page2():
     # 차트 2번: 3차원 버블 차트 (예산 규모 통제 분석)
     # ------------------------------------------
     st.subheader("🪐 차트 2: 지자체 예산 규모를 통제한 3차원 버블 입체 분석")
-    st.write("예산 총액을 점의 크기로 환산해 차트화한 결과입니다. 예산 규모가 크고 작음과 상관없이, **축제 여부**에 따라 상권의 변동 성격이 빨간색과 파란색으로 명확히 나뉘는 가설을 증명합니다.")
+    st.write("예산 총액을 점의 크기로 환산해 차트화한 결과입니다. 예산 규모의 고저와 무관하게, **축제 여부**에 따라 변동 성격이 명확히 구획화되는 가설을 증명합니다.")
     
     fig2 = px.scatter_3d(
         df_relation,
@@ -429,11 +434,11 @@ def render_page2():
 
 
 # ==========================================
-# 3. 페이지 3: 세금 효율성 분석 및 관광 효과
+# 3. 페이지 3: 세금 효율성 분석 및 관광 효과 (인사이트 차트 탑재)
 # ==========================================
 def render_page3():
     st.title("💸 예산 집행 효율성 및 관광 연계 효과 진단")
-    st.markdown("정부 예산 지출(순원가)이 관내 경제 진작과 국내 대체 관광수요 확보에 기여한 성과를 분석합니다.")
+    st.markdown("정부 예산 지출(순원가)이 관내 경제 진작과 관광 유인 편익에 기여한 성과를 분석합니다.")
     
     df_cost, is_c_mock = load_table_safely("행사원가회계정보", get_fallback_cost)
     
@@ -451,10 +456,18 @@ def render_page3():
     
     df_sub = df_cost[df_cost[org_col] == selected_org].copy()
     
-    st.subheader(f"📊 [{selected_org}] 예산 운용 대조표")
+    # 문자열 숫자로 보정
+    df_sub[total_cost_col] = pd.to_numeric(df_sub[total_cost_col], errors='coerce').fillna(0)
+    df_sub[rev_col] = pd.to_numeric(df_sub[rev_col], errors='coerce').fillna(0)
+    df_sub[net_cost_col] = pd.to_numeric(df_sub[net_cost_col], errors='coerce').fillna(0)
+    
+    # ------------------------------------------
+    # 차트 1번: 투입 예산 규모 비교
+    # ------------------------------------------
+    st.subheader(f"📊 [{selected_org}] 행사 세금 환산비용 대조")
     if not df_sub.empty:
-        df_sub["총비용(백만원)"] = pd.to_numeric(df_sub[total_cost_col], errors='coerce').fillna(0) / 1000000
-        df_sub["순원가(백만원)"] = pd.to_numeric(df_sub[net_cost_col], errors='coerce').fillna(0) / 1000000
+        df_sub["총비용(백만원)"] = df_sub[total_cost_col] / 1000000
+        df_sub["순원가(백만원)"] = df_sub[net_cost_col] / 1000000
         
         df_melted = df_sub.melt(
             id_vars=[name_col],
@@ -475,6 +488,42 @@ def render_page3():
             template="plotly_white"
         )
         st.plotly_chart(fig, use_container_width=True, key="p3_budget_bar")
+        
+    # ------------------------------------------
+    # [추가] 차트 2번: 지율 자생력 vs 세금 의존도 인사이트 차트
+    # ------------------------------------------
+    st.subheader("💡 축제 재정 자력 구조 분석 (세금 의존도 vs 자체 보전율)")
+    st.write("축제가 세금 지원에 전적으로 의존하는지, 아니면 티켓 및 수익 제휴를 통해 스스로 비용을 메꾸고 있는지 예산 건전성을 평가합니다.")
+    
+    if not df_sub.empty:
+        # 비율 연산
+        df_sub["자체자립도(%)"] = df_sub.apply(
+            lambda r: (r[rev_col] / r[total_cost_col] * 100) if r[total_cost_col] > 0 else 0, axis=1
+        )
+        df_sub["세금의존도(%)"] = df_sub.apply(
+            lambda r: (r[net_cost_col] / r[total_cost_col] * 100) if r[total_cost_col] > 0 else 0, axis=1
+        )
+        
+        df_pct_melted = df_sub.melt(
+            id_vars=[name_col],
+            value_vars=["자체자립도(%)", "세금의존도(%)"],
+            var_name="재정지표",
+            value_name="비중(%)"
+        )
+        
+        fig_pct = px.bar(
+            df_pct_melted,
+            y=name_col,
+            x="비중(%)",
+            color="재정지표",
+            orientation='h',
+            barmode="stack",
+            title="축제별 재정 구성비 (누적 막대)",
+            labels={"비중(%)": "비율 (%)", name_col: "축제명"},
+            color_discrete_sequence=["#2CA02C", "#D62728"], # 초록(자립), 빨강(의존)
+            template="plotly_white"
+        )
+        st.plotly_chart(fig_pct, use_container_width=True, key="p3_efficiency_percentage")
         
     st.markdown("---")
     col1, col2 = st.columns(2)
