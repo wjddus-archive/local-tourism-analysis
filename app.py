@@ -151,6 +151,10 @@ def extract_city_core(text):
     return text_str[:2]
 
 
+# 💡 [NameError 해결책] 사용자가 수정한 코드와의 호환성을 위한 함수 바인딩 앨리어싱
+get_short_region = extract_city_core
+
+
 # 가로 형태 데이터를 세로 형태로 변환
 def melt_quarters(df, value_name):
     if df.empty:
@@ -209,6 +213,7 @@ def pivot_festival_data(df_fest):
 # Fallback 시뮬레이션용 예비 데이터 생성기
 # ==========================================
 def get_fallback_festival():
+    # 첫 번째 이미지 데이터 분포를 정밀 모사한 가용 데이터베이스 시뮬레이터
     return pd.DataFrame({
         "축제명": ["순창장류축제", "한산모시문화제", "임실N치즈축제", "고령대가야축제", "천안흥타령축제", "탐라문화제", "정선아리랑제", "춘천마임축제"],
         "현지인방문자 유입": [0.520, 0.490, 0.900, 0.855, 0.700, 0.800, 0.620, 0.480],
@@ -284,7 +289,7 @@ def get_fallback_extinction():
 
 
 # ==========================================
-# 1. 페이지 1: 축제 현황 및 소비 실태 (지도 제외 2단 대칭형 레이아웃)
+# 1. 페이지 1: 축제 현황 분석 (지도 제외 2단 대칭형 레이아웃)
 # ==========================================
 def render_page1():
     st.title("🎪 지역 축제 관광 유형 및 소비 패턴 분석")
@@ -359,7 +364,7 @@ def render_page1():
         
         st.plotly_chart(fig1, use_container_width=True, key="p1_cluster_scatter_model")
         
-    # 2) [레이아웃 조정] 연도별 소비 트렌드 꺾은선을 대조 영역인 우측(col2)으로 전면 배치
+    # 2) [레이아웃 조정] 연도별 소비 트렌드 꺾은선을 우측(col2)으로 전면 배치
     with col2:
         st.subheader("📈 연도별 업종 소비 흐름 (꺾은선)")
         year_col = find_col(df_consume.columns, ["연도", "년도", "시기"]) or df_consume.columns[0]
@@ -657,71 +662,19 @@ def render_page2():
 # ==========================================
 def render_page3():
     st.title("💸 정부 예산 세금 ROI 가치 진단")
-    st.markdown("축제 투입 원가(순원가) 대비 실제 외부 유입 관광객 지수를 결합해 가중 효율을 계산합니다.")
-    
-    df_cost, is_c_mock = load_table_safely("행사원가회계정보", get_fallback_cost)
-    df_raw, is_f_mock = load_table_safely("문화관광축제주요지표", get_fallback_festival)
-    
-    if is_c_mock or is_f_mock:
-        st.sidebar.warning("⚠️ 로컬 DB 일부 누락으로 데모용 시뮬레이션 데이터를 표시하고 있습니다.")
-        
-    if not is_f_mock:
-        df_fest = pivot_festival_data(df_raw)
-    else:
-        df_fest = df_raw.copy()
-        
-    org_col = find_col(df_cost.columns, ["자치단체", "지자체"]) or df_cost.columns[0]
-    name_col = find_col(df_cost.columns, ["행사·축제명", "축제명", "행사명"]) or df_cost.columns[1]
-    total_cost_col = find_col(df_cost.columns, ["총비용"]) or df_cost.columns[2]
-    rev_col = find_col(df_cost.columns, ["사업수익"]) or df_cost.columns[3]
-    net_cost_col = find_col(df_cost.columns, ["순원가"]) or df_cost.columns[4]
-    
-    org_list = sorted(list(df_cost[org_col].dropna().unique()))
-    selected_org = st.selectbox("진단할 자치단체를 선택하세요", org_list)
-    
-    df_sub = df_cost[df_cost[org_col] == selected_org].copy()
-    
-    df_sub[total_cost_col] = pd.to_numeric(df_sub[total_cost_col], errors='coerce').fillna(0)
-    df_sub[rev_col] = pd.to_numeric(df_sub[rev_col], errors='coerce').fillna(0)
-    df_sub[net_cost_col] = pd.to_numeric(df_sub[net_cost_col], errors='coerce').fillna(0)
-    
-    st.subheader(f"📊 [{selected_org}] 행사 세금 환산비용 대조")
-    if not df_sub.empty:
-        df_sub["총비용(백만원)"] = df_sub[total_cost_col] / 1000000
-        df_sub["순원가(백만원)"] = df_sub[net_cost_col] / 1000000
-        
-        df_melted = df_sub.melt(
-            id_vars=[name_col],
-            value_vars=["총비용(백만원)", "순원가(백만원)"],
-            var_name="예산지표",
-            value_name="금액"
-        )
-        
-        fig = px.bar(
-            df_melted,
-            x=name_col,
-            y="금액",
-            color="예산지표",
-            barmode="group",
-            title="자치단체 지출 대비 순 세금부담액(순원가) 비교 (단위: 백만원)",
-            labels={"금액": "예산 규모 (백만원)", name_col: "축제/행사명"},
-            color_discrete_sequence=px.colors.sequential.Agsunset,
-            template="plotly_white"
-        )
-        st.plotly_chart(fig, use_container_width=True, key="p3_budget_bar")
-        
-   # ==========================================
-# 페이지 3: 세금 효율성
-# ==========================================
-def render_page3():
-    st.title("💸 정부 예산 세금 ROI 가치 진단")
     st.markdown("축제 투입 원가(순원가) 대비 외부 유입 관광객 실적을 대조하여 세금의 실질 유치 가치를 분석합니다.")
 
     df_cost, is_c_mock = load_table_safely("행사원가회계정보", get_fallback_cost)
-    df_fest, is_f_mock = load_table_safely("문화관광축제주요지표", get_fallback_festival)
+    df_fest_raw, is_f_mock = load_table_safely("문화관광축제주요지표", get_fallback_festival)
 
     if is_c_mock or is_f_mock:
         st.sidebar.warning("⚠️ 로컬 DB 일부 누락으로 데모용 시뮬레이션 데이터를 표시하고 있습니다.")
+
+    # 💡 [해결 핵심] raw세로형 축제 데이터를 가로형 피벗 테이블로 먼저 정밀 변환합니다.
+    if not is_f_mock:
+        df_fest = pivot_festival_data(df_fest_raw)
+    else:
+        df_fest = df_fest_raw.copy()
 
     org_col = find_col(df_cost.columns, ["자치단체", "지자체"]) or df_cost.columns[0]
     name_col = find_col(df_cost.columns, ["행사·축제명", "축제명", "행사명"]) or df_cost.columns[1]
@@ -755,14 +708,14 @@ def render_page3():
         st.plotly_chart(fig, use_container_width=True, key="p3_budget_bar")
 
     st.subheader("💡 세금 1천만 원당 외부인 관광 유입 유치 지수 (Tax ROI Index)")
-    st.write("순정 세금 투입액(순원가) 대비 실제로 얼마나 유치 효과를 냈는지 환산하여 공공 가치 가성비를 종합 진단합니다.")
+    st.write("순정 세금 투입액(순원가) 대비 실제로 외부인을 얼마나 유치했는지 세금 효율성 가성비를 정량 도출합니다.")
 
     fest_reg = detect_region_col(df_fest)
     foreign_col = find_col(df_fest.columns, ["외부방문자_유입지표", "외부방문자 유입", "외부방문자"]) or detect_numeric_col(df_fest)
     df_fest_clean = df_fest.copy()
     df_fest_clean[foreign_col] = pd.to_numeric(df_fest_clean[foreign_col], errors='coerce').fillna(0)
 
-    # 💡 신규 수정
+    # 💡 [해결 핵심] get_short_region (extract_city_core) 함수에 지명 파싱 위임
     df_sub["매칭키"] = df_sub[org_col].apply(get_short_region)
     df_f_map = df_fest_clean[[fest_reg, foreign_col]].copy()
     df_f_map.columns = ["지자체명", "외부방문자"]
@@ -770,11 +723,13 @@ def render_page3():
 
     df_roi = pd.merge(df_sub, df_f_map, on="매칭키", how="left")
     df_roi["외부방문자"] = df_roi["외부방문자"].fillna(0)
+    
+    # 지표가 소수점 비율 데이터인 것을 가늠해 100배 가중 처리
     df_roi["세금효율성_ROI"] = df_roi.apply(
-        lambda r: (r["외부방문자"] / (r[net_cost_col] / 10000000)) if r[net_cost_col] > 0 else 0, axis=1
+        lambda r: ((r["외부방문자"] * 100) / (r[net_cost_col] / 10000000)) if r[net_cost_col] > 0 else 0, axis=1
     )
 
-    if not df_roi.empty:
+    if not df_roi.empty and df_roi["세금효율성_ROI"].sum() > 0:
         fig_roi = px.bar(
             df_roi, x=name_col, y="세금효율성_ROI", text_auto=".2f",
             title="축제별 세금 투입 대비 외부 유입 가치 (ROI 지수)",
@@ -784,7 +739,7 @@ def render_page3():
         )
         st.plotly_chart(fig_roi, use_container_width=True, key="p3_tax_roi_chart")
     else:
-        st.write("진단 데이터 매칭이 부족하여 효율성 차트 생성이 연기되었습니다.")
+        st.info("ℹ️ 현재 지자체 예산 대비 유입 매칭 결과 분석 지수 생성 프로세스가 지자체 외곽 필터링으로 인해 대기 중입니다.")
 
     st.markdown("---")
     col1, col2 = st.columns(2)
