@@ -148,12 +148,13 @@ def melt_quarters(df, value_name):
 # Fallback 시뮬레이션용 예비 데이터 생성기
 # ==========================================
 def get_fallback_festival():
+    # 첫 번째 이미지 데이터 분포를 정밀 모사한 가용 데이터베이스 시뮬레이터
     return pd.DataFrame({
-        "축제명": ["춘천닭갈비축제", "강경젓갈축제", "지평선축제", "머드축제"],
-        "현지인방문자 유입": [32.4, 45.1, 28.7, 15.3],
-        "외부방문자 유입": [67.6, 54.9, 71.3, 84.7],
-        "평가지표": [85, 78, 92, 95],
-        "지자체": ["강원", "충남", "전북", "충남"]
+        "축제명": ["순창장류축제", "한산모시문화제", "임실N치즈축제", "고령대가야축제", "천안흥타령축제", "탐라문화제", "가상축제A", "가상축제B", "가상축제C"],
+        "현지인방문자 유입": [52.0, 49.0, 90.0, 85.5, 70.0, 80.0, 62.0, 48.0, 49.2],
+        "외부방문자 유입": [83.0, 99.1, 85.0, 89.2, 79.5, 70.1, 51.5, 40.5, 63.2],
+        "평가지표": [85, 78, 92, 95, 88, 91, 70, 65, 72],
+        "지자체": ["전북", "충남", "전북", "경북", "충남", "제주", "경기", "강원", "충북"]
     })
 
 def get_fallback_consume():
@@ -192,13 +193,42 @@ def get_fallback_cost():
         "순원가": [950000000, 730000000, 1220000000]
     })
 
+def get_fallback_extinction():
+    # 두 번째 이미지의 공공 통계 데이터를 완벽하게 구현한 Fallback 세트
+    return pd.DataFrame({
+        "구분": [
+            "지방소멸 문제 심각성", 
+            "지방소멸 문제 심각성 (지자체 공무원)", 
+            "중앙정부 대응 효과성", 
+            "중앙정부 대응 효과성 (지자체 공무원)", 
+            "지방소멸 대응 준비 수준(관심)", 
+            "지방소멸 대응 준비 수준(기술)", 
+            "지방소멸 대응 준비 수준(자원)", 
+            "지방소멸 대응 준비 수준(상위 예산)", 
+            "지방소멸 대응 준비 수준(협력 체계)"
+        ],
+        "항목_내용": [
+            "우리나라 지방소멸 문제의 심각성",
+            "소속 지자체에서의 지방소멸 문제의 심각성",
+            "지방소멸 문제에 대한 중앙정부의 대응 효과성",
+            "소속 지역 지방소멸 문제에 대한 지자체의 기여도",
+            "관심",
+            "전문지식과 기술",
+            "자원",
+            "상위수준 정부의 지원 확보",
+            "협력체계에 대한 참여권"
+        ],
+        "평균": [4.42, 3.74, 2.23, 2.73, 3.02, 2.64, 2.58, 2.48, 2.59],
+        "표준편차": [0.83, 1.19, 1.01, 0.88, 1.00, 0.91, 0.91, 0.92, 0.87]
+    })
+
 
 # ==========================================
 # 1. 페이지 1: 축제 현황 및 업종별 누적 소비 구조
 # ==========================================
 def render_page1():
     st.title("🎪 지역 축제 현황 및 시계열 소비 패턴")
-    st.markdown("가로로 펼쳐진 소비 데이터 구조를 세로 구조로 정밀 가공하여 소비 동향을 관측합니다.")
+    st.markdown("데이터베이스에 수집된 방문객 유입 비율을 기반으로 관광 유형을 다각도로 분석합니다.")
     
     df_fest, is_f_mock = load_table_safely("문화관광축제주요지표", get_fallback_festival)
     df_consume, is_c_mock = load_table_safely("업종별소비액", get_fallback_consume)
@@ -208,14 +238,11 @@ def render_page1():
         
     col1, col2 = st.columns(2)
     
-    # 1) 축제 방문객 유입 비율 차트 (col1)
+    # 1) [개편] 첫 번째 이미지 형태의 '관광유형 분산 사분면 버블 차트' (col1)
     with col1:
-        st.subheader("📍 축제별 현지인 vs 외부인 비율")
-        name_col = find_col(
-            df_fest.columns, 
-            ["축제명", "행사명", "축제", "이름"]
-        ) or df_fest.columns[0]
+        st.subheader("📍 외부방문자 유입 및 관광유형 분류 모델")
         
+        name_col = find_col(df_fest.columns, ["축제명", "행사명", "축제", "이름"]) or df_fest.columns[0]
         local_col = find_col(df_fest.columns, ["현지인방문자 유입", "현지인"])
         foreign_col = find_col(df_fest.columns, ["외부방문자 유입", "외부방문자"])
         
@@ -223,33 +250,60 @@ def render_page1():
             df_fest[local_col] = pd.to_numeric(df_fest[local_col], errors='coerce').fillna(0)
             df_fest[foreign_col] = pd.to_numeric(df_fest[foreign_col], errors='coerce').fillna(0)
             
-            df_melted = df_fest.melt(
-                id_vars=[name_col],
-                value_vars=[local_col, foreign_col],
-                var_name="방문객 구분",
-                value_name="비율(%)"
-            )
+            # 소수점 데이터(예: 0.83)의 경우, % 스케일링 보정
+            if df_fest[local_col].max() <= 1.0:
+                df_fest[local_col] = df_fest[local_col] * 100
+            if df_fest[foreign_col].max() <= 1.0:
+                df_fest[foreign_col] = df_fest[foreign_col] * 100
+                
+            # 이미지 1번의 군집화 수학적 분류 알고리즘 이식
+            # X(외부유입) 기준선: 72.0% / Y(현지유입) 기준선: 64.0%
+            def assign_cluster(row):
+                x = row[foreign_col]
+                y = row[local_col]
+                if x < 72.0:
+                    return "외부유입 낮음"
+                elif y >= 64.0:
+                    return "체류형"
+                else:
+                    return "당일치기형"
+                    
+            df_fest["관광유형"] = df_fest.apply(assign_cluster, axis=1)
             
-            fig1 = px.bar(
-                df_melted,
-                x=name_col,
-                y="비율(%)",
-                color="방문객 구분",
-                barmode="group",
-                color_discrete_sequence=px.colors.qualitative.Pastel,
+            # 첫 번째 이미지의 전용 컬러 스펙트럼 설계
+            fig1 = px.scatter(
+                df_fest,
+                x=foreign_col,
+                y=local_col,
+                color="관광유형",
+                text=name_col,
+                color_discrete_map={
+                    "당일치기형": "#E07A5F",   # 주황색
+                    "체류형": "#3D9A7A",      # 초록색
+                    "외부유입 낮음": "#5F9EE0"  # 하늘색
+                },
+                labels={foreign_col: "외부방문자 유입률 (%)", local_col: "현지인방문자 유입 (%) (관광소비 지수 대용)"},
                 template="plotly_white"
             )
-            st.plotly_chart(fig1, use_container_width=True, key="p1_visit_chart")
+            
+            # 이미지 1의 사분면 가이드 점선 구현
+            fig1.add_hline(y=64.0, line_dash="dash", line_color="#C0C0C0")
+            fig1.add_vline(x=72.0, line_dash="dash", line_color="#C0C0C0")
+            
+            fig1.update_traces(marker=dict(size=24, opacity=0.85), textposition='top center')
+            fig1.update_xaxes(showgrid=True, gridcolor='#F3F3F3')
+            fig1.update_yaxes(showgrid=True, gridcolor='#F3F3F3')
+            
+            st.plotly_chart(fig1, use_container_width=True, key="p1_scatter_cluster_model")
         else:
-            st.write("유입 비중 컬럼 검색에 실패하였습니다. 원본 형태를 표시합니다.")
+            st.write("관광유형 모델 구현에 필요한 유입 컬럼 매칭에 실패했습니다.")
             st.dataframe(df_fest.head())
             
-    # 2) [에러 완벽 예방] 가로 구조를 세로 구조로 Melt 처리하여 연도별 소비 꺾은선 차트화
+    # 2) 업종별 소비 흐름 분석 (col2 - 꺾은선 차트)
     with col2:
         st.subheader("📈 연도별 업종 소비 흐름 (꺾은선)")
         year_col = find_col(df_consume.columns, ["연도", "년도", "시기"]) or df_consume.columns[0]
         
-        # 연도 컬럼을 제외한 모든 컬럼을 소비 업종 데이터로 분류하여 Melt 진행
         other_cols = [c for c in df_consume.columns if c != year_col]
         
         df_melted_consume = df_consume.melt(
@@ -259,7 +313,6 @@ def render_page1():
             value_name="소비액"
         )
         
-        # 가독성을 높이기 위해 '소비액', '(천원)' 등 중복 수식어 정제
         df_melted_consume["소비업종"] = df_melted_consume["소비업종"].astype(str)\
             .str.replace(" 소비액", "")\
             .str.replace(" (천원)", "", regex=False)\
@@ -268,7 +321,6 @@ def render_page1():
             
         df_melted_consume["소비액"] = pd.to_numeric(df_melted_consume["소비액"], errors='coerce').fillna(0)
         
-        # 안전한 유니크 임시 컬럼 집계
         df_sub = df_melted_consume[[year_col, "소비업종", "소비액"]].copy()
         df_sub.columns = ["_temp_year", "_temp_sector", "_temp_amount"]
         df_trend = df_sub.groupby(["_temp_year", "_temp_sector"])["_temp_amount"].sum().reset_index()
@@ -286,7 +338,6 @@ def render_page1():
         )
         st.plotly_chart(fig2, use_container_width=True, key="p1_consume_trend_line_safe")
 
-    # 요구사항 데이터 인사이트
     st.info("""
     **💡 데이터 분석 결과 보고**
     
@@ -295,11 +346,11 @@ def render_page1():
 
 
 # ==========================================
-# 2. 페이지 2: 젠트리피케이션 분석 (시계열 비교 차트 보완)
+# 2. 페이지 2: 젠트리피케이션 분석 (지방소멸 설문 추가)
 # ==========================================
 def render_page2():
     st.title("🏢 젠트리피케이션과 지역 축제 상관성 분석")
-    st.markdown("축제 상권(실험군)과 일반 상권(대조군)의 격차를 정적 분산 구조와 시계열 트렌드로 비교 분석합니다.")
+    st.markdown("축제 성과지표와 주변 상권의 공실률/임대료 지표를 교차 매칭하여 실질적 연관성을 검정합니다.")
     
     df_vac, is_v_mock = load_table_safely("임대동향 지역별 공실률 소규모 상가", get_fallback_property_vacancy)
     df_rent, is_r_mock = load_table_safely("임대동향 지역별 임대료 소규모 상가", get_fallback_property_rent)
@@ -445,7 +496,7 @@ def render_page2():
     st.plotly_chart(fig2, use_container_width=True, key="p2_3d_bubble")
 
     # ------------------------------------------
-    # [추가] 차트 3번: 축제 상권과 일반 상권의 분기별 실시간 동향 비교 (꺾은선)
+    # 차트 3번: 축제 상권과 일반 상권의 분기별 실시간 동향 비교 (꺾은선)
     # ------------------------------------------
     st.subheader("📈 차트 3: 축제 유무에 따른 분기별 임대료 및 공실률 실시간 추이")
     st.write("시간의 흐름에 따라 축제 상권(실험군)과 일반 상권(대조군)의 부동산 변수가 어떻게 벌어지는지 추적합니다.")
@@ -453,22 +504,18 @@ def render_page2():
     m_vac_full, r_v_col = melt_quarters(df_vac, "공실률")
     m_rent_full, r_r_col = melt_quarters(df_rent, "임대료")
     
-    # 매칭용 지역 전처리 키 추가
     m_vac_full["매칭키"] = m_vac_full[r_v_col].apply(lambda x: str(x)[:2] if pd.notna(x) else "")
     m_rent_full["매칭키"] = m_rent_full[r_r_col].apply(lambda x: str(x)[:2] if pd.notna(x) else "")
     
-    # 축제 데이터 병합하여 그룹명 수립
     m_vac_full = pd.merge(m_vac_full, df_fest_group[["매칭키", "지자체명"]], on="매칭키", how="left")
     m_vac_full["상권구분"] = m_vac_full["지자체명"].apply(lambda x: "축제 상권 (실험군)" if pd.notna(x) else "일반 상권 (대조군)")
     
     m_rent_full = pd.merge(m_rent_full, df_fest_group[["매칭키", "지자체명"]], on="매칭키", how="left")
     m_rent_full["상권구분"] = m_rent_full["지자체명"].apply(lambda x: "축제 상권 (실험군)" if pd.notna(x) else "일반 상권 (대조군)")
     
-    # 데이터타입 숫자형 통제
     m_vac_full["공실률"] = pd.to_numeric(m_vac_full["공실률"], errors='coerce').fillna(0)
     m_rent_full["임대료"] = pd.to_numeric(m_rent_full["임대료"], errors='coerce').fillna(0)
     
-    # 중복 집계 예방용 임시 맵핑 적용 연산
     v_sub = m_vac_full[["상권구분", "분기", "공실률"]].copy()
     v_sub.columns = ["_temp_group", "_temp_quarter", "_temp_vac"]
     df_vac_trend = v_sub.groupby(["_temp_group", "_temp_quarter"])["_temp_vac"].mean().reset_index()
@@ -507,10 +554,44 @@ def render_page2():
         )
         st.plotly_chart(fig_v_trend, use_container_width=True)
 
+    # ------------------------------------------
+    # [신규 추가] 차트 4번: 두 번째 이미지의 지방소멸 대응 지표 수평 오류막대 차트
+    # ------------------------------------------
+    st.write("---")
+    st.subheader("⚠️ 지방소멸 대응 준비 수준 및 지방 공무원 인식 진단 (지방소멸설문 데이터)")
+    st.write("지방소멸 위기감은 매우 높으나, 상위 지자체나 중앙정부 수준의 자원 확보 및 구체적인 기술 준비도는 한참 미비하다는 실태를 보여줍니다.")
+    
+    df_ext, is_ext_mock = load_table_safely("지방소멸설문", get_fallback_extinction)
+    
+    if not df_ext.empty:
+        df_ext["평균"] = pd.to_numeric(df_ext["평균"], errors='coerce').fillna(0)
+        df_ext["표준편차"] = pd.to_numeric(df_ext["표준편차"], errors='coerce').fillna(0)
+        
+        # 연구 보고서 표준 스타일로 평균 점수 내림차순 정렬 및 오차막대 시각화
+        df_ext = df_ext.sort_values(by="평균", ascending=True)
+        
+        fig4 = px.bar(
+            df_ext,
+            y="구분",
+            x="평균",
+            error_x="표준편차", # 두 번째 이미지 요건 반영: 편차를 에러바로 표현
+            color="평균",
+            color_continuous_scale="Tealgrn",
+            orientation="h",
+            title="지방소멸 위기 의식 및 지자체 준비 수준 (5점 만점)",
+            labels={"평균": "평균 점수 (5점 만점)", "구분": "분석 항목", "표준편차": "표준편차"},
+            template="plotly_white"
+        )
+        fig4.update_layout(coloraxis_showscale=False) # 불필요한 컬러바 생략
+        st.plotly_chart(fig4, use_container_width=True, key="p2_local_extinction_bar")
+    else:
+        st.write("지방소멸 설문 데이터 조회가 불가능합니다.")
+
     st.markdown("---")
     st.markdown("""
     **📋 상권 분석 요약**
     * **시계열 추적**: 차트 3의 추이를 통해, 일반 상권 대비 축제 상권의 임대료가 장기적으로 어떤 격차를 유발하는지 통계적으로 비교할 수 있습니다.
+    * **지방소멸 위기 진단**: 공무원들이 체감하는 위기 심각성(4.42점) 대비 구체적인 지원 자원이나 대비 기술(2.5점 안팎)이 낮게 평가되어 상권 자생력 확보가 시급함을 알 수 있습니다.
     """)
 
 
