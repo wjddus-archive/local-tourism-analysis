@@ -117,11 +117,11 @@ def detect_numeric_col(df):
     return num_cols[0] if num_cols else None
 
 
-# [해결 핵심 알고리즘] 다양한 지명 표기를 100% 매칭하는 정밀 텍스트 파서
-def extract_city_core(text):
+# 💡 [에러 해결 및 기능 일치] 지자체 및 축제 지명을 100% 정상화하는 핵심 매칭 파서
+def get_short_region(text):
     """
     '강원특별자치도 춘천시'나 '춘천마임축제'에서 핵심 지명인 '춘천'을 추출하고,
-    '한산모시문화제'는 주최측 행정구역인 '서천'군과 수동 바인딩하여 유실률을 0%로 통제합니다.
+    '한산모시문화제'는 주최측 행정구역인 '서천'군과 수동 바인딩하여 유실률을 해결합니다.
     """
     text_str = str(text).strip()
     
@@ -150,9 +150,8 @@ def extract_city_core(text):
         
     return text_str[:2]
 
-
-# 💡 [NameError 해결책] 사용자가 수정한 코드와의 호환성을 위한 함수 바인딩 앨리어싱
-get_short_region = extract_city_core
+# 변수 호환용 앨리어싱 설정
+extract_city_core = get_short_region
 
 
 # 가로 형태 데이터를 세로 형태로 변환
@@ -456,7 +455,7 @@ def render_page2():
         left_on=reg_col_vac, 
         right_on=reg_col_rent
     )
-    df_prop["매칭키"] = df_prop[reg_col_vac].apply(extract_city_core)
+    df_prop["매칭키"] = df_prop[reg_col_vac].apply(get_short_region)
     
     fest_reg = detect_region_col(df_fest)
     foreign_col = find_col(df_fest.columns, ["외부방문자 유입", "외부방문자"]) or detect_numeric_col(df_fest)
@@ -469,12 +468,14 @@ def render_page2():
     df_fest_group = df_f_sub.groupby("_temp_reg")["_temp_foreign"].mean().reset_index()
     
     df_fest_group.columns = ["지자체명", "외부방문자유입"]
-    df_fest_group["매칭키"] = df_fest_group["지자체명"].apply(extract_city_core)
+    df_fest_group["매칭키"] = df_fest_group["지자체명"].apply(get_short_region)
     
     cost_org = find_col(df_cost.columns, ["자치단체", "지자체"]) or df_cost.columns[0]
     cost_val = find_col(df_cost.columns, ["총비용"]) or df_cost.select_dtypes(include=['number']).columns[-1]
     
+    # 💡 [정성 보정] 총비용에서 쉽표 제거 후 숫자형 변환 수행
     df_cost_clean = df_cost.copy()
+    df_cost_clean[cost_val] = df_cost_clean[cost_val].astype(str).str.replace(",", "").str.strip()
     df_cost_clean[cost_val] = pd.to_numeric(df_cost_clean[cost_val], errors='coerce').fillna(0)
     
     df_c_sub = df_cost_clean[[cost_org, cost_val]].copy()
@@ -482,7 +483,7 @@ def render_page2():
     df_cost_group = df_c_sub.groupby("_temp_org")["_temp_cost"].sum().reset_index()
     
     df_cost_group.columns = ["예산지자체", "예산총액(원)"]
-    df_cost_group["매칭키"] = df_cost_group["예산지자체"].apply(extract_city_core)
+    df_cost_group["매칭키"] = df_cost_group["예산지자체"].apply(get_short_region)
     
     df_relation = pd.merge(df_prop, df_fest_group, on="매칭키", how="left")
     df_relation = pd.merge(df_relation, df_cost_group, on="매칭키", how="left")
@@ -567,8 +568,8 @@ def render_page2():
     m_vac_full, r_v_col = melt_quarters(df_vac, "공실률")
     m_rent_full, r_r_col = melt_quarters(df_rent, "임대료")
     
-    m_vac_full["매칭키"] = m_vac_full[r_v_col].apply(extract_city_core)
-    m_rent_full["매칭키"] = m_rent_full[r_r_col].apply(extract_city_core)
+    m_vac_full["매칭키"] = m_vac_full[r_v_col].apply(get_short_region)
+    m_rent_full["매칭키"] = m_rent_full[r_r_col].apply(get_short_region)
     
     m_vac_full = pd.merge(m_vac_full, df_fest_group[["매칭키", "지자체명"]], on="매칭키", how="left")
     m_vac_full["상권구분"] = m_vac_full["지자체명"].apply(lambda x: "축제 상권 (실험군)" if pd.notna(x) else "일반 상권 (대조군)")
@@ -657,15 +658,24 @@ def render_page2():
     """)
 
 
+# ==========================================
+# 3. 페이지 3: 세금 효율성 분석 및 관광 효과 (가치 효율성 ROI 지수 고도화 및 공백 버그 전면 격파)
+# ==========================================
 def render_page3():
     st.title("💸 정부 예산 세금 ROI 가치 진단")
-    st.markdown("축제 투입 원가(순원가) 대비 외부 유입 관광객 실적을 대조하여 세금의 실질 유치 가치를 분석합니다.")
+    st.markdown("축제 투입 원가(순원가) 대비 실제 외부 유입 관광객 지수를 결합해 가중 효율을 계산합니다.")
     
     df_cost, is_c_mock = load_table_safely("행사원가회계정보", get_fallback_cost)
-    df_fest, is_f_mock = load_table_safely("문화관광축제주요지표", get_fallback_festival)
+    df_fest_raw, is_f_mock = load_table_safely("문화관광축제주요지표", get_fallback_festival)
     
     if is_c_mock or is_f_mock:
         st.sidebar.warning("⚠️ 로컬 DB 일부 누락으로 데모용 시뮬레이션 데이터를 표시하고 있습니다.")
+        
+    # 💡 [피벗 변환 복구] 세로형 축제 데이터를 가로형 피벗 테이블로 복원
+    if not is_f_mock:
+        df_fest = pivot_festival_data(df_fest_raw)
+    else:
+        df_fest = df_fest_raw.copy()
         
     org_col = find_col(df_cost.columns, ["자치단체", "지자체"]) or df_cost.columns[0]
     name_col = find_col(df_cost.columns, ["행사·축제명", "축제명", "행사명"]) or df_cost.columns[1]
@@ -678,10 +688,10 @@ def render_page3():
     
     df_sub = df_cost[df_cost[org_col] == selected_org].copy()
     
-    # 숫자형 보정
-    df_sub[total_cost_col] = pd.to_numeric(df_sub[total_cost_col], errors='coerce').fillna(0)
-    df_sub[rev_col] = pd.to_numeric(df_sub[rev_col], errors='coerce').fillna(0)
-    df_sub[net_cost_col] = pd.to_numeric(df_sub[net_cost_col], errors='coerce').fillna(0)
+    # 💡 [핵심 해결 1] 예산 문자열에 포함된 쉼표(,) 및 공백을 정밀 제거한 후 숫자형 변환 수행
+    for col in [total_cost_col, rev_col, net_cost_col]:
+        df_sub[col] = df_sub[col].astype(str).str.replace(",", "").str.replace(" ", "").str.strip()
+        df_sub[col] = pd.to_numeric(df_sub[col], errors='coerce').fillna(0)
     
     st.subheader(f"📊 [{selected_org}] 행사 세금 환산비용 대조")
     if not df_sub.empty:
@@ -708,50 +718,51 @@ def render_page3():
         )
         st.plotly_chart(fig, use_container_width=True, key="p3_budget_bar")
         
-    # ------------------------------------------
-    # [인사이트 업그레이드] 세금 예산 대비 외부방문객 유치 가치(ROI) 분석
-    # ------------------------------------------
-    st.subheader("💡 세금 1천만 원당 외부인 관광 유입 유치 지수 (Tax ROI Index)")
-    st.write("순정 세금 투입액(순원가) 대비 실제로 얼마나 유치 효과를 냈는지 환산하여 공공 가치 가성비를 종합 진단합니다.")
+    st.subheader("💡 세금 10억 원당 외부인 관광 유입 유치 지수 (Tax ROI Index)")
+    st.write("순정 세금 투입액(순원가) 대비 실제로 외부인을 얼마나 유치했는지 가시성 높은 세금 효율 지표로 진단합니다.")
     
-    # 지자체 키를 활용해 외부방문객 유입 매핑 진행
     fest_reg = detect_region_col(df_fest)
-    foreign_col = find_col(df_fest.columns, ["외부방문자 유입", "외부방문자"]) or detect_numeric_col(df_fest)
+    foreign_col = find_col(df_fest.columns, ["외부방문자_유입지표", "외부방문자 유입", "외부방문자"]) or detect_numeric_col(df_fest)
     
     df_fest_clean = df_fest.copy()
     df_fest_clean[foreign_col] = pd.to_numeric(df_fest_clean[foreign_col], errors='coerce').fillna(0)
     
-    # 예산과 결합
-    df_sub["매칭키"] = df_sub[org_col].apply(lambda x: str(x)[:2] if pd.notna(x) else "")
-    
+    # 지표값이 소수점 비율 형태인 것을 감안해 사전에 100% 퍼센트 스케일로 규격화
+    if df_fest_clean[foreign_col].max() <= 1.0:
+        df_fest_clean[foreign_col] = df_fest_clean[foreign_col] * 100
+        
+    # 지명 전처리 파싱
+    df_sub["매칭키"] = df_sub[org_col].apply(get_short_region)
     df_f_map = df_fest_clean[[fest_reg, foreign_col]].copy()
     df_f_map.columns = ["지자체명", "외부방문자"]
-    df_f_map["매칭키"] = df_f_map["지자체명"].apply(lambda x: str(x)[:2] if pd.notna(x) else "")
+    df_f_map["매칭키"] = df_f_map["지자체명"].apply(get_short_region)
     
-    # 조인 수행
     df_roi = pd.merge(df_sub, df_f_map, on="매칭키", how="left")
     df_roi["외부방문자"] = df_roi["외부방문자"].fillna(0)
     
-    # 효율성 지수 계산: (외부방문자 규모 / (순원가 / 10,000,000)) -> 세금 1천만원 당 방문자 지수
+    # 💡 [핵심 해결 2] 지나치게 작아 차트가 누워있던 소수점 지표를 사람이 인지하기 쉬운 '세금 10억 원당 효율성' 스케일로 스케일링 보완
+    # 공식: (외부유입%지수) / (순원가 / 1,000,000,000)
     df_roi["세금효율성_ROI"] = df_roi.apply(
-        lambda r: (r["외부방문자"] / (r[net_cost_col] / 10000000)) if r[net_cost_col] > 0 else 0, axis=1
+        lambda r: (r["외부방문자"] / (r[net_cost_col] / 1000000000)) if r[net_cost_col] > 0 else 0,
+        axis=1
     )
     
-    if not df_roi.empty:
+    # 가용 데이터 검증 후 정상 렌더링
+    if not df_roi.empty and df_roi["세금효율성_ROI"].sum() > 0:
         fig_roi = px.bar(
             df_roi,
             x=name_col,
             y="세금효율성_ROI",
             text_auto=".2f",
-            title="축제별 세금 투입 대비 외부 유입 가치 (ROI 지수)",
-            labels={"세금효율성_ROI": "세금 1천만원 당 외부 유입 지수", name_col: "축제명"},
+            title="축제별 세금 투입 대비 외부인 관광객 유치 가치 (ROI 지수)",
+            labels={"세금효율성_ROI": "세금 10억 원당 외부인 유입 지수", name_col: "축제명"},
             color="세금효율성_ROI",
             color_continuous_scale="Reds",
             template="plotly_white"
         )
-        st.plotly_chart(fig_roi, use_container_width=True, key="p3_tax_roi_chart")
+        st.plotly_chart(fig_roi, use_container_width=True, key="p3_tax_roi_chart_fixed")
     else:
-        st.write("진단 데이터 매칭이 부족하여 효율성 차트 생성이 연기되었습니다.")
+        st.info("ℹ️ 현재 선택된 지자체 권역의 세금 집행 및 축제 관광유입 맵핑 지수 연산 결과가 존재하지 않거나 0입니다.")
         
     st.markdown("---")
     col1, col2 = st.columns(2)
@@ -767,7 +778,6 @@ def render_page3():
         * **관광 대체**: 지방 축제 지원금은 단순 낭비가 아닌, 해외 관광 수요를 적극 흡수하여 국내 지역 경제로 선순환시키는 공공 편익을 발생시킵니다.
         * **생활인구 유도**: 정주 인구가 감소하는 지방 소도시에 외부 유입을 유도하여, 정성적인 지역 소멸 예방 및 소상공인 매출 개선 효과를 견인합니다.
         """)
-
 
 
 # ==========================================
